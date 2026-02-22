@@ -13,12 +13,15 @@ async function conectar() {
 
   SQL = await initSqlJs();
 
-  // Carregar banco existente ou criar novo
+  // SEMPRE carregar o banco commitado como base (contém as chaves pré-geradas)
+  // No Render (free tier), o filesystem é efêmero, mas o arquivo deployado persiste
   if (fs.existsSync(DB_PATH)) {
     const buffer = fs.readFileSync(DB_PATH);
     db = new SQL.Database(buffer);
+    console.log('Banco carregado de ' + DB_PATH);
   } else {
     db = new SQL.Database();
+    console.log('Banco novo criado (sem arquivo base)');
   }
 
   criarTabelas();
@@ -27,9 +30,16 @@ async function conectar() {
 
 function salvar() {
   if (!db) return;
-  const data = db.export();
-  const buffer = Buffer.from(data);
-  fs.writeFileSync(DB_PATH, buffer);
+  // Tentar salvar no disco (funciona local, pode falhar no Render)
+  try {
+    const data = db.export();
+    const buffer = Buffer.from(data);
+    fs.writeFileSync(DB_PATH, buffer);
+  } catch (e) {
+    // No Render free tier, a escrita pode falhar em alguns cenários
+    // O banco continua funcionando em memória
+    console.log('Aviso: não foi possível salvar no disco (normal no Render)');
+  }
 }
 
 function criarTabelas() {
