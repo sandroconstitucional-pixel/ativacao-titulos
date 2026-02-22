@@ -1,0 +1,4 @@
+node_modules/
+chaves.db
+*.db
+.env
