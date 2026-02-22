@@ -4,10 +4,20 @@ const db = require('./database');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const ADMIN_KEY = process.env.ADMIN_KEY || 'd11dec54d5b7c4fcfd3d034b211a9f12b0d185f36ef8449b';
 
 // Middlewares
 app.use(cors());
 app.use(express.json());
+
+// Middleware de autenticação admin
+function verificarAdmin(req, res, next) {
+  const key = req.headers['x-admin-key'];
+  if (key !== ADMIN_KEY) {
+    return res.status(401).json({ erro: 'Não autorizado' });
+  }
+  next();
+}
 
 // ==================== ENDPOINTS ====================
 
@@ -72,6 +82,67 @@ app.post('/api/desativar', (req, res) => {
 // GET /api/status — Health check
 app.get('/api/status', (req, res) => {
   res.json({ status: 'online', timestamp: new Date().toISOString() });
+});
+
+// ==================== ENDPOINTS ADMIN ====================
+
+// POST /api/admin/gerar — Gera nova chave
+app.post('/api/admin/gerar', verificarAdmin, (req, res) => {
+  try {
+    const { nome, email, maxDispositivos } = req.body;
+    if (!nome) {
+      return res.status(400).json({ erro: 'Nome é obrigatório' });
+    }
+    const chave = db.criarChave(nome, email, maxDispositivos || 3);
+    res.json({ sucesso: true, chave });
+  } catch (err) {
+    console.error('Erro em /api/admin/gerar:', err.message);
+    res.status(500).json({ erro: 'Erro interno' });
+  }
+});
+
+// GET /api/admin/listar — Lista todas as chaves
+app.get('/api/admin/listar', verificarAdmin, (req, res) => {
+  try {
+    const chaves = db.listarChaves();
+    res.json({ chaves });
+  } catch (err) {
+    res.status(500).json({ erro: 'Erro interno' });
+  }
+});
+
+// GET /api/admin/ver/:chave — Detalhes de uma chave
+app.get('/api/admin/ver/:chave', verificarAdmin, (req, res) => {
+  try {
+    const registro = db.buscarChave(req.params.chave.toUpperCase());
+    if (!registro) return res.status(404).json({ erro: 'Chave não encontrada' });
+    const dispositivos = db.listarDispositivos(req.params.chave.toUpperCase());
+    res.json({ ...registro, dispositivos });
+  } catch (err) {
+    res.status(500).json({ erro: 'Erro interno' });
+  }
+});
+
+// POST /api/admin/bloquear — Bloqueia uma chave
+app.post('/api/admin/bloquear', verificarAdmin, (req, res) => {
+  try {
+    const { chave } = req.body;
+    const sucesso = db.alterarStatusChave(chave.toUpperCase(), false);
+    res.json({ sucesso });
+  } catch (err) {
+    res.status(500).json({ erro: 'Erro interno' });
+  }
+});
+
+// POST /api/admin/desbloquear — Desbloqueia uma chave
+app.post('/api/admin/desbloquear', verificarAdmin, (req, res) => {
+  try {
+    const { chave } = req.body;
+    const sucesso = db.alterarStatusChave(chave.toUpperCase(), true);
+    res.json({ sucesso });
+  } catch (err) {
+    res.status(500).json({ erro: 'Erro interno' });
+  }
 });
 
 // ==================== INICIAR ====================
