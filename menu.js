@@ -1,13 +1,22 @@
 /**
- * MENU INTERATIVO - Sistema de Ativação
+ * MENU INTERATIVO - Sistema de Ativação (100% LOCAL)
  * Basta rodar: node menu.js
  * Ou dar duplo clique no GERENCIAR-CHAVES.bat
+ *
+ * Todas as operações são feitas no banco local.
+ * Use a opção [6] para publicar no servidor.
  */
 
 const readline = require('readline');
+const initSqlJs = require('sql.js');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 
-const SERVIDOR = 'https://ativacao-titulos.onrender.com';
-const ADMIN_KEY = 'd11dec54d5b7c4fcfd3d034b211a9f12b0d185f36ef8449b';
+const DB_PATH = path.join(__dirname, 'servidor', 'chaves.db');
+
+let db;
+let SQL;
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -18,22 +27,72 @@ function perguntar(texto) {
   return new Promise(resolve => rl.question(texto, resolve));
 }
 
-async function chamarAPI(metodo, endpoint, dados) {
-  const url = SERVIDOR + endpoint;
-  const opcoes = {
-    method: metodo,
-    headers: {
-      'Content-Type': 'application/json',
-      'x-admin-key': ADMIN_KEY
-    }
-  };
-  if (dados) opcoes.body = JSON.stringify(dados);
-  const resp = await fetch(url, opcoes);
-  return await resp.json();
-}
-
 function limpar() {
   console.clear();
+}
+
+// ==================== BANCO DE DADOS LOCAL ====================
+
+async function abrirBanco() {
+  if (db) return;
+  SQL = await initSqlJs();
+  if (fs.existsSync(DB_PATH)) {
+    const buffer = fs.readFileSync(DB_PATH);
+    db = new SQL.Database(buffer);
+  } else {
+    db = new SQL.Database();
+  }
+  // Garantir tabelas
+  db.run(`CREATE TABLE IF NOT EXISTS chaves (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chave TEXT UNIQUE NOT NULL,
+    nome_comprador TEXT NOT NULL,
+    email TEXT,
+    max_dispositivos INTEGER DEFAULT 3,
+    ativa INTEGER DEFAULT 1,
+    criada_em DATETIME DEFAULT (datetime('now','localtime'))
+  )`);
+  db.run(`CREATE TABLE IF NOT EXISTS dispositivos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chave_id INTEGER NOT NULL,
+    fingerprint TEXT NOT NULL,
+    nome TEXT,
+    token TEXT UNIQUE NOT NULL,
+    ativado_em DATETIME DEFAULT (datetime('now','localtime')),
+    ultimo_acesso DATETIME DEFAULT (datetime('now','localtime')),
+    FOREIGN KEY (chave_id) REFERENCES chaves(id),
+    UNIQUE(chave_id, fingerprint)
+  )`);
+  salvarBanco();
+}
+
+function salvarBanco() {
+  const data = db.export();
+  fs.writeFileSync(DB_PATH, Buffer.from(data));
+}
+
+function queryAll(sql, params) {
+  const stmt = db.prepare(sql);
+  if (params) stmt.bind(params);
+  const resultados = [];
+  while (stmt.step()) resultados.push(stmt.getAsObject());
+  stmt.free();
+  return resultados;
+}
+
+function queryOne(sql, params) {
+  const resultados = queryAll(sql, params);
+  return resultados.length > 0 ? resultados[0] : null;
+}
+
+function gerarCodigoChave() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bloco = () => {
+    let s = '';
+    for (let i = 0; i < 4; i++) s += chars[crypto.randomInt(chars.length)];
+    return s;
+  };
+  return 'TC-2026-' + bloco() + '-' + bloco() + '-' + bloco();
 }
 
 // ==================== MENU ====================
@@ -90,47 +149,21 @@ async function gerarChave() {
 
   const email = await perguntar('  E-mail (opcional, aperte ENTER para pular): ');
 
-  console.log('\n  Gerando chave no servidor...');
-  const resultado = await chamarAPI('POST', '/api/admin/gerar', {
-    nome: nome.trim(),
-    email: email.trim()
-  });
+  // Gerar chave única
+  let chave;
+  do {
+    chave = gerarCodigoChave();
+  } while (queryOne('SELECT 1 FROM chaves WHERE chave = ?', [chave]));
 
-  if (resultado.erro) {
-    console.log('  ERRO: ' + resultado.erro);
-    return;
-  }
-
-  // Salvar também no banco LOCAL para persistência no deploy
-  try {
-    const initSqlJs = require('sql.js');
-    const fs = require('fs');
-    const path = require('path');
-    const DB_PATH = path.join(__dirname, 'servidor', 'chaves.db');
-    const SQL = await initSqlJs();
-    let db;
-    if (fs.existsSync(DB_PATH)) {
-      const buffer = fs.readFileSync(DB_PATH);
-      db = new SQL.Database(buffer);
-    } else {
-      db = new SQL.Database();
-      db.run("CREATE TABLE IF NOT EXISTS chaves (id INTEGER PRIMARY KEY AUTOINCREMENT, chave TEXT UNIQUE NOT NULL, nome_comprador TEXT NOT NULL, email TEXT, max_dispositivos INTEGER DEFAULT 3, ativa INTEGER DEFAULT 1, criada_em DATETIME DEFAULT (datetime('now','localtime')))");
-    }
-    db.run('INSERT OR IGNORE INTO chaves (chave, nome_comprador, email, max_dispositivos) VALUES (?, ?, ?, ?)',
-      [resultado.chave, nome.trim(), email.trim(), 3]);
-    fs.writeFileSync(DB_PATH, Buffer.from(db.export()));
-    db.close();
-    console.log('  Chave salva no banco local (pronta para deploy).');
-  } catch(e) {
-    console.log('  Aviso: não salvou localmente (' + e.message + ')');
-    console.log('  A chave funciona, mas faça deploy para persistir.');
-  }
+  db.run('INSERT INTO chaves (chave, nome_comprador, email, max_dispositivos) VALUES (?, ?, ?, ?)',
+    [chave, nome.trim(), email.trim() || '', 3]);
+  salvarBanco();
 
   console.log('');
   console.log('  ┌────────────────────────────────────────┐');
   console.log('  │  CHAVE GERADA COM SUCESSO!             │');
   console.log('  │                                        │');
-  console.log('  │  ' + resultado.chave.padEnd(38) + '│');
+  console.log('  │  ' + chave.padEnd(38) + '│');
   console.log('  │                                        │');
   console.log('  │  Comprador: ' + nome.trim().substring(0, 26).padEnd(26) + '│');
   console.log('  │  Limite: 3 dispositivos                │');
@@ -139,26 +172,16 @@ async function gerarChave() {
   console.log('  COPIE A CHAVE ACIMA e envie junto com o');
   console.log('  arquivo HTML para o comprador.');
   console.log('');
-  console.log('  IMPORTANTE: Para garantir que a chave');
-  console.log('  persista, execute depois:');
-  console.log('  cd C:\\Users\\Usuario\\Projetos\\sistema-ativacao');
-  console.log('  git add servidor/chaves.db && git commit -m "Nova chave" && git push');
+  console.log('  >>> Use opção [6] para publicar no servidor <<<');
 }
 
 async function listarChaves() {
   limpar();
-  console.log('\n  === TODAS AS CHAVES ===\n');
-  console.log('  Carregando...');
-
-  const resultado = await chamarAPI('GET', '/api/admin/listar');
-
-  if (resultado.erro) {
-    console.log('  ERRO: ' + resultado.erro);
-    return;
-  }
-
-  const chaves = resultado.chaves;
-  limpar();
+  const chaves = queryAll(`
+    SELECT c.*,
+      (SELECT COUNT(*) FROM dispositivos d WHERE d.chave_id = c.id) as dispositivos_ativos
+    FROM chaves c ORDER BY c.criada_em DESC
+  `);
 
   if (chaves.length === 0) {
     console.log('\n  Nenhuma chave cadastrada ainda.');
@@ -190,15 +213,17 @@ async function verChave() {
   const chave = await perguntar('  Digite a chave: ');
   if (!chave.trim()) return;
 
-  console.log('  Buscando...');
-  const registro = await chamarAPI('GET', '/api/admin/ver/' + chave.trim().toUpperCase());
+  const registro = queryOne('SELECT * FROM chaves WHERE chave = ?', [chave.trim().toUpperCase()]);
 
-  if (registro.erro) {
+  if (!registro) {
     console.log('  Chave não encontrada!');
     return;
   }
 
-  const dispositivos = registro.dispositivos || [];
+  const dispositivos = queryAll(
+    'SELECT * FROM dispositivos WHERE chave_id = ? ORDER BY ativado_em DESC',
+    [registro.id]
+  );
 
   console.log('');
   console.log('  Chave:        ' + registro.chave);
@@ -230,14 +255,16 @@ async function bloquearChave() {
     return;
   }
 
-  const resultado = await chamarAPI('POST', '/api/admin/bloquear', { chave: chave.trim().toUpperCase() });
-
-  if (resultado.sucesso) {
-    console.log('  Chave BLOQUEADA com sucesso!');
-    console.log('  O comprador não conseguirá mais acessar.');
-  } else {
+  const registro = queryOne('SELECT * FROM chaves WHERE chave = ?', [chave.trim().toUpperCase()]);
+  if (!registro) {
     console.log('  Chave não encontrada!');
+    return;
   }
+
+  db.run('UPDATE chaves SET ativa = 0 WHERE chave = ?', [chave.trim().toUpperCase()]);
+  salvarBanco();
+  console.log('  Chave BLOQUEADA com sucesso!');
+  console.log('  Use opção [6] para aplicar no servidor.');
 }
 
 async function desbloquearChave() {
@@ -247,36 +274,54 @@ async function desbloquearChave() {
   const chave = await perguntar('  Digite a chave para DESBLOQUEAR: ');
   if (!chave.trim()) return;
 
-  const resultado = await chamarAPI('POST', '/api/admin/desbloquear', { chave: chave.trim().toUpperCase() });
-
-  if (resultado.sucesso) {
-    console.log('  Chave DESBLOQUEADA com sucesso!');
-  } else {
+  const registro = queryOne('SELECT * FROM chaves WHERE chave = ?', [chave.trim().toUpperCase()]);
+  if (!registro) {
     console.log('  Chave não encontrada!');
+    return;
   }
+
+  db.run('UPDATE chaves SET ativa = 1 WHERE chave = ?', [chave.trim().toUpperCase()]);
+  salvarBanco();
+  console.log('  Chave DESBLOQUEADA com sucesso!');
+  console.log('  Use opção [6] para aplicar no servidor.');
 }
 
 async function publicarChaves() {
   limpar();
   console.log('\n  === PUBLICAR CHAVES NO SERVIDOR ===\n');
-  console.log('  Isso vai enviar o banco de dados com todas');
-  console.log('  as chaves para o servidor (deploy).\n');
 
-  const confirma = await perguntar('  Confirma? (s/n): ');
+  // Mostrar chaves que serão publicadas
+  const chaves = queryAll('SELECT chave, nome_comprador, ativa FROM chaves ORDER BY id');
+  console.log('  Chaves que serão publicadas:');
+  for (const c of chaves) {
+    console.log('    ' + (c.ativa ? '✓' : '✗') + ' ' + c.chave + ' - ' + c.nome_comprador);
+  }
+  console.log('');
+
+  const confirma = await perguntar('  Publicar no servidor? (s/n): ');
   if (confirma.toLowerCase() !== 's') {
     console.log('  Cancelado.');
     return;
   }
 
-  console.log('\n  Fazendo commit e push...');
+  console.log('\n  Enviando para o servidor...');
 
   const { execSync } = require('child_process');
   const dir = __dirname;
 
   try {
     execSync('git add servidor/chaves.db', { cwd: dir, stdio: 'pipe' });
-    execSync('git commit -m "Atualizar chaves de ativacao"', { cwd: dir, stdio: 'pipe' });
-    execSync('git push origin master', { cwd: dir, stdio: 'pipe' });
+    try {
+      execSync('git commit -m "Atualizar chaves de ativacao"', { cwd: dir, stdio: 'pipe' });
+    } catch(e) {
+      if (e.stderr && e.stderr.toString().includes('nothing to commit')) {
+        console.log('  Banco já está atualizado no git.');
+        console.log('  Forçando push...');
+      } else {
+        throw e;
+      }
+    }
+    execSync('git push origin master', { cwd: dir, stdio: 'pipe', timeout: 30000 });
     console.log('');
     console.log('  ┌────────────────────────────────────────┐');
     console.log('  │  PUBLICADO COM SUCESSO!                │');
@@ -285,18 +330,19 @@ async function publicarChaves() {
     console.log('  │  Todas as chaves estarão disponíveis.  │');
     console.log('  └────────────────────────────────────────┘');
   } catch(e) {
-    if (e.message.includes('nothing to commit')) {
-      console.log('  Nada para publicar - banco já está atualizado.');
-    } else {
-      console.log('  ERRO: ' + e.message);
-    }
+    console.log('  ERRO ao publicar: ' + (e.stderr ? e.stderr.toString().substring(0, 200) : e.message));
+    console.log('  Tente manualmente:');
+    console.log('    cd C:\\Users\\Usuario\\Projetos\\sistema-ativacao');
+    console.log('    git add servidor/chaves.db && git commit -m "chaves" && git push');
   }
 }
 
 // ==================== INICIAR ====================
 
-mostrarMenu().catch(err => {
-  console.error('  Erro de conexão: ' + err.message);
-  console.error('  Verifique sua internet.');
+(async () => {
+  await abrirBanco();
+  await mostrarMenu();
+})().catch(err => {
+  console.error('  Erro: ' + err.message);
   rl.close();
 });
