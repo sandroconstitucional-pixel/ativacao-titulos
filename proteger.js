@@ -145,8 +145,10 @@ const STORAGE_KEY = 'tc_ativacao';
 // ==================== DETECÇÃO iOS/MOBILE ====================
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const isMobile = /Mobile|Android/.test(navigator.userAgent) || isIOS;
-const TIMEOUT_PADRAO = (isMobile || isIOS) ? 45000 : 15000;
-const TIMEOUT_RETRY = 60000;
+// CORRIGIDO: Desktop 30s (antes 15s — insuficiente para cold start Render)
+const TIMEOUT_PADRAO = (isMobile || isIOS) ? 45000 : 30000;
+const TIMEOUT_RETRY = 90000;
+const MAX_TENTATIVAS = 3;
 
 // ==================== STORAGE SEGURO (fallback sessionStorage) ====================
 const storage = (function() {
@@ -242,10 +244,10 @@ function salvarAtivacao(token) {
 function carregarAtivacao() { try { const d = storage.getItem(STORAGE_KEY); return d ? JSON.parse(d) : null; } catch(e) { return null; } }
 function limparAtivacao() { storage.removeItem(STORAGE_KEY); }
 
-// ==================== COMUNICAÇÃO COM SERVIDOR (auto-retry) ====================
+// ==================== COMUNICAÇÃO COM SERVIDOR (ROBUSTO) ====================
 async function chamarAPIComTimeout(endpoint, dados, timeout) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
+  const timer = setTimeout(function() { controller.abort(); }, timeout);
   try {
     const resp = await fetch(SERVIDOR + endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(dados), signal: controller.signal, mode: 'cors' });
     clearTimeout(timer);
@@ -253,17 +255,27 @@ async function chamarAPIComTimeout(endpoint, dados, timeout) {
   } catch(e) { clearTimeout(timer); throw e; }
 }
 
+// CORRIGIDO: Retry para QUALQUER erro (não só AbortError)
 async function chamarAPI(endpoint, dados) {
-  try {
-    return await chamarAPIComTimeout(endpoint, dados, TIMEOUT_PADRAO);
-  } catch(e) {
-    if (e.name === 'AbortError') {
-      console.log('Timeout na 1a tentativa, tentando novamente com timeout maior...');
-      return await chamarAPIComTimeout(endpoint, dados, TIMEOUT_RETRY);
+  let ultimoErro = null;
+  for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
+    try {
+      const timeout = tentativa === 1 ? TIMEOUT_PADRAO : TIMEOUT_RETRY;
+      if (tentativa > 1) {
+        console.log('Tentativa ' + tentativa + '/' + MAX_TENTATIVAS + '...');
+        await new Promise(function(r) { setTimeout(r, 2000); });
+      }
+      return await chamarAPIComTimeout(endpoint, dados, timeout);
+    } catch(e) {
+      ultimoErro = e;
+      console.log('Tentativa ' + tentativa + ' falhou:', e.name, e.message);
     }
-    throw e;
   }
+  throw ultimoErro;
 }
+
+// Pré-aquecer servidor ao carregar
+(function() { try { fetch(SERVIDOR + '/api/status', { mode: 'cors' }).catch(function(){}); } catch(e) {} })();
 
 // ==================== ATIVAÇÃO ====================
 async function ativar() {
