@@ -86,14 +86,14 @@ app.get('/api/status', (req, res) => {
 
 // ==================== ENDPOINTS ADMIN ====================
 
-// POST /api/admin/gerar — Gera nova chave
+// POST /api/admin/gerar — Gera nova chave (aceita prefixo: TC, RI, etc.)
 app.post('/api/admin/gerar', verificarAdmin, (req, res) => {
   try {
-    const { nome, email, maxDispositivos } = req.body;
+    const { nome, email, maxDispositivos, prefixo } = req.body;
     if (!nome) {
       return res.status(400).json({ erro: 'Nome é obrigatório' });
     }
-    const chave = db.criarChave(nome, email, maxDispositivos || 3);
+    const chave = db.criarChave(nome, email, maxDispositivos || 3, prefixo || 'TC');
     res.json({ sucesso: true, chave });
   } catch (err) {
     console.error('Erro em /api/admin/gerar:', err.message);

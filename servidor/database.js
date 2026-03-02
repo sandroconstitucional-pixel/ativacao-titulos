@@ -100,7 +100,7 @@ function execute(sql, params = []) {
 
 // ==================== CHAVES ====================
 
-function gerarCodigoChave() {
+function gerarCodigoChave(prefixo = 'TC') {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sem I,O,0,1 para evitar confusão
   const bloco = () => {
     let s = '';
@@ -109,14 +109,14 @@ function gerarCodigoChave() {
     }
     return s;
   };
-  return `TC-2026-${bloco()}-${bloco()}-${bloco()}`;
+  return `${prefixo.toUpperCase()}-2026-${bloco()}-${bloco()}-${bloco()}`;
 }
 
-function criarChave(nomeComprador, email, maxDispositivos = 3) {
+function criarChave(nomeComprador, email, maxDispositivos = 3, prefixo = 'TC') {
   let chave;
   // Garantir chave única
   do {
-    chave = gerarCodigoChave();
+    chave = gerarCodigoChave(prefixo);
   } while (queryOne('SELECT 1 FROM chaves WHERE chave = ?', [chave]));
 
   execute(
