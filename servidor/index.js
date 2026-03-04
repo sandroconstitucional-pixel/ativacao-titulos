@@ -21,10 +21,10 @@ function verificarAdmin(req, res, next) {
 
 // ==================== ENDPOINTS ====================
 
-// POST /api/ativar — Ativa uma chave em um dispositivo
+// POST /api/ativar — Ativa uma chave em um dispositivo (aceita curso para validação)
 app.post('/api/ativar', (req, res) => {
   try {
-    const { chave, fingerprint, nomeDispositivo } = req.body;
+    const { chave, fingerprint, nomeDispositivo, curso } = req.body;
 
     if (!chave || !fingerprint) {
       return res.status(400).json({
@@ -33,7 +33,7 @@ app.post('/api/ativar', (req, res) => {
       });
     }
 
-    const resultado = db.ativarDispositivo(chave.trim().toUpperCase(), fingerprint, nomeDispositivo);
+    const resultado = db.ativarDispositivo(chave.trim().toUpperCase(), fingerprint, nomeDispositivo, curso || null);
     const status = resultado.sucesso ? 200 : 403;
     res.status(status).json(resultado);
   } catch (err) {
@@ -86,14 +86,14 @@ app.get('/api/status', (req, res) => {
 
 // ==================== ENDPOINTS ADMIN ====================
 
-// POST /api/admin/gerar — Gera nova chave (aceita prefixo: TC, RI, etc.)
+// POST /api/admin/gerar — Gera nova chave (aceita prefixo e cursos)
 app.post('/api/admin/gerar', verificarAdmin, (req, res) => {
   try {
-    const { nome, email, maxDispositivos, prefixo } = req.body;
+    const { nome, email, maxDispositivos, prefixo, cursos } = req.body;
     if (!nome) {
       return res.status(400).json({ erro: 'Nome é obrigatório' });
     }
-    const chave = db.criarChave(nome, email, maxDispositivos || 3, prefixo || 'TC');
+    const chave = db.criarChave(nome, email, maxDispositivos || 3, prefixo || 'TC', cursos || null);
     res.json({ sucesso: true, chave });
   } catch (err) {
     console.error('Erro em /api/admin/gerar:', err.message);

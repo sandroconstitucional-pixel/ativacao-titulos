@@ -51,9 +51,17 @@ function criarTabelas() {
       email TEXT,
       max_dispositivos INTEGER DEFAULT 3,
       ativa INTEGER DEFAULT 1,
+      cursos TEXT DEFAULT NULL,
       criada_em DATETIME DEFAULT (datetime('now', 'localtime'))
     )
   `);
+
+  // Migração: adicionar coluna cursos se não existir (para bancos antigos)
+  try {
+    db.run('ALTER TABLE chaves ADD COLUMN cursos TEXT DEFAULT NULL');
+  } catch (e) {
+    // Coluna já existe — ignorar
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS dispositivos (
@@ -112,16 +120,19 @@ function gerarCodigoChave(prefixo = 'TC') {
   return `${prefixo.toUpperCase()}-2026-${bloco()}-${bloco()}-${bloco()}`;
 }
 
-function criarChave(nomeComprador, email, maxDispositivos = 3, prefixo = 'TC') {
+function criarChave(nomeComprador, email, maxDispositivos = 3, prefixo = 'TC', cursos = null) {
   let chave;
   // Garantir chave única
   do {
     chave = gerarCodigoChave(prefixo);
   } while (queryOne('SELECT 1 FROM chaves WHERE chave = ?', [chave]));
 
+  // cursos: array de strings ex: ["ADM","RI","TRIB"] — salva como JSON
+  const cursosJson = cursos && Array.isArray(cursos) && cursos.length > 0 ? JSON.stringify(cursos) : null;
+
   execute(
-    'INSERT INTO chaves (chave, nome_comprador, email, max_dispositivos) VALUES (?, ?, ?, ?)',
-    [chave, nomeComprador, email || '', maxDispositivos]
+    'INSERT INTO chaves (chave, nome_comprador, email, max_dispositivos, cursos) VALUES (?, ?, ?, ?, ?)',
+    [chave, nomeComprador, email || '', maxDispositivos, cursosJson]
   );
 
   return chave;
@@ -151,7 +162,7 @@ function gerarToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
-function ativarDispositivo(chave, fingerprint, nomeDispositivo) {
+function ativarDispositivo(chave, fingerprint, nomeDispositivo, curso = null) {
   // Buscar chave
   const registro = queryOne('SELECT * FROM chaves WHERE chave = ?', [chave]);
   if (!registro) {
@@ -160,6 +171,19 @@ function ativarDispositivo(chave, fingerprint, nomeDispositivo) {
   if (!registro.ativa) {
     return { sucesso: false, erro: 'Chave bloqueada. Entre em contato com o suporte.' };
   }
+
+  // Verificar permissão de curso (se informado)
+  if (curso && registro.cursos) {
+    try {
+      const cursosPermitidos = JSON.parse(registro.cursos);
+      if (Array.isArray(cursosPermitidos) && !cursosPermitidos.includes(curso.toUpperCase())) {
+        return { sucesso: false, erro: 'Esta chave não dá acesso ao curso ' + curso + '. Cursos permitidos: ' + cursosPermitidos.join(', ') };
+      }
+    } catch(e) {
+      // cursos inválido — permitir (retrocompatibilidade)
+    }
+  }
+  // Se registro.cursos for null = chave universal (acesso a todos)
 
   // Verificar se dispositivo já está registrado
   const dispositivoExistente = queryOne(
